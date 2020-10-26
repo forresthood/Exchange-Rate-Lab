@@ -23,7 +23,11 @@ import org.json.simple.JSONArray;
 import java.util.Date;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Iterator;
+import java.util.Set;
 import org.json.simple.parser.JSONParser;
+import com.google.gson.Gson;
+import java.math.MathContext;
 
 /**
  *
@@ -54,7 +58,7 @@ public class CurrencyServlet extends HttpServlet {
         PreparedStatement pstatement = null;
         ResultSet resultset = null;
         
-        JSONObject jsonObject;
+        JSONObject jsonObject = new JSONObject();
         boolean hasresults;
         
         try{
@@ -63,23 +67,34 @@ public class CurrencyServlet extends HttpServlet {
             
             pstatement = connection.prepareStatement("SELECT rate FROM rate WHERE code = ? AND date = ?");
             
-            String parameter = request.getParameter("currency_select");
+            String code = request.getParameter("currency_select");
             String dateString = request.getParameter("date");
             Date date = new SimpleDateFormat("yyyy-MM-dd").parse(dateString);
             
-            pstatement.setString(1, parameter);
+            pstatement.setString(1, code);
             pstatement.setDate(2, new java.sql.Date(date.getTime()));
             hasresults = pstatement.execute();
             resultset = pstatement.getResultSet();
             
             if (resultset.next()) {
-                System.err.println("Has Results (not possible)");
+                System.err.println("Has Results from db");
                 
                 System.err.println(resultset.toString());
+                
+                JSONObject dbResponse = new JSONObject();
+                jsonObject.put(code, resultset.getFloat("rate"));
+                dbResponse.put("rates", jsonObject);
+                dbResponse.put("base", "USD"); // I get an error "java.sql.SQLException: Column 'base' not found" if i try to get the base from the reultset. It inserts the base correctly though so ¯\_(ツ)_/¯ this works until the user is allowed to change the base currency.
+                dbResponse.put("date", dateString);
+                
+                String jsonString = dbResponse.toJSONString();
+                System.err.println(jsonString);
+                out.print(jsonString);
+                out.flush();
             }
             else{
-                JSONObject responseObj = retrieveData(date, parameter);
-                addToDatabase(responseObj);
+                JSONObject responseObj = retrieveData(date, code);
+                addToDatabase(responseObj, connection, date, code);
                 
                 String jsonString= responseObj.toJSONString();
                 System.err.println(jsonString);
@@ -106,12 +121,54 @@ public class CurrencyServlet extends HttpServlet {
         doGet(request, response);
     }
     
-    protected void addToDatabase(JSONObject jsonResponse) {
+    protected void addToDatabase(JSONObject jsonResponse, Connection connection, Date date, String symbol) {
+        try{
+            System.err.println("addToDatabase called");
+            
+            PreparedStatement pst = connection.prepareStatement("INSERT INTO rate VALUES(?, ?, ?, ?)");
+            
+            //String base = jsonResponse.get("base").toString();
+            JSONObject rate = new JSONObject();
+            Gson gson = new Gson();
+            String r = gson.toJson(jsonResponse.get("rates"));
+            JSONParser parser = new JSONParser();
+            rate = (JSONObject)parser.parse(r);
+            
+            System.err.println(rate.toJSONString() + "Ratestring");
+            System.err.println(symbol + ": Base");
+            
+            r = rate.get(symbol).toString();
+            BigDecimal decimalRate = new BigDecimal(r);
+            
+            System.err.println(r + " Rate - string");
+            
+            pst.setString(1, symbol);
+            pst.setDate(2, new java.sql.Date(date.getTime()));
+            pst.setFloat(3, Float.parseFloat(r));          
+            pst.setString(4, "USD");
+            
+            int success = pst.executeUpdate();
+            
+            if (success > 0) {
+                System.err.println("Added to db successfully");
+            }
+            else{
+                System.err.println("Failed to add to db");
+            }        
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
         
     }
     
+    /**
+     * Retrieves the desired info if it's not already
+     * in the database
+     */
     protected JSONObject retrieveData(Date date, String symbol) {
         System.err.println("Retrieve data called");
+        System.err.println("Symbol: " + symbol);
         String uri= "https://api.exchangeratesapi.io/";
         JSONObject jsonResponse = null;
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd");
